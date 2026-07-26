@@ -79,14 +79,7 @@ impl CudaContext {
                 sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED,
             )?
         };
-        let compute_capability_major = unsafe {
-            result::device::get_attribute(
-                cu_device,
-                sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-            )?
-        };
-
-        Ok(memory_pools_supported > 0 && compute_capability_major >= 8)
+        Ok(memory_pools_supported > 0)
     }
 
     /// Creates a new context on the specified device ordinal.
@@ -112,9 +105,9 @@ impl CudaContext {
             async_alloc = has_async_alloc,
             "CUDA device init: async alloc (cudaMallocAsync / memory pools) {}",
             if has_async_alloc {
-                "ENABLED (SM8+)"
+                "ENABLED"
             } else {
-                "DISABLED (pre-SM8 or pools unsupported)"
+                "DISABLED (pools unsupported)"
             }
         );
         Ok(ctx)
@@ -2566,6 +2559,31 @@ mod tests {
             assert!(unsafe { view_mut.transmute_mut::<f32>(25) }.is_some());
             assert!(unsafe { view_mut.transmute_mut::<f32>(26) }.is_none());
         }
+    }
+
+    #[test]
+    fn async_allocator_matches_driver_capability() {
+        result::init().unwrap();
+        let device = result::device::get(0).unwrap();
+        let pools_supported = unsafe {
+            result::device::get_attribute(
+                device,
+                sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED,
+            )
+        }
+        .unwrap()
+            > 0;
+
+        let ctx = CudaContext::new(0).unwrap();
+        assert_eq!(ctx.is_async_alloc(), pools_supported);
+
+        let slice = unsafe { ctx.default_stream().alloc::<u8>(16) }.unwrap();
+        let expected = if pools_supported {
+            AllocationKind::Async
+        } else {
+            AllocationKind::Sync
+        };
+        assert_eq!(slice.allocation, expected);
     }
 
     #[test]
